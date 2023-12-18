@@ -4,13 +4,15 @@ use regex::Regex;
 
 #[derive(Debug)]
 pub enum Token {
+    Eof,
     Def,
     Extern,
-    LPar,
-    RPar,
+    LParen,
+    RParen,
+    Comma,
     Identifier(String),
     Number(f64),
-    Other(u8),
+    Operator(String),
 }
 
 pub struct Tokenizer<'a> {
@@ -26,8 +28,11 @@ impl<'a> Tokenizer<'a> {
             r"(?<comment>#.*\n)|",           // Comment
             r"(?<identifier>[a-zA-Z_]\w*)|", // Identifier
             r"(?<number>\d+\.?\d*)|",        // Number
-            r"(?<lpar>\()|",                 // Left parenthesis
-            r"(?<rpar>\))",                  // Right parenthesis
+            r"(?<lparen>\()|",                 // Left parenthesis
+            r"(?<rparen>\))|",                  // Right parenthesis
+            r"(?<comma>,)|",                  // Comma
+            r"(?<operator>\S+)|",
+            r"(?<eof>$)",
             r")",
         );
         let re = Regex::new(patterns).unwrap();
@@ -53,7 +58,7 @@ impl<'a> Tokenizer<'a> {
                 }
                 None => {
                     return Err(LexError(format!(
-                        "bad token at index={} starting with '{}'",
+                        "bad token at byte {} starting with '{}'",
                         self.index,
                         offset_input.chars().next().unwrap(),
                     )));
@@ -80,12 +85,18 @@ impl<'a> Tokenizer<'a> {
                     Ok(n) => return Ok(Token::Number(n)),
                     Err(_) => return Err(LexError("failed to parse number".into())),
                 }
-            } else if let Some(_) = cap.name("lpar") {
-                return Ok(Token::LPar);
-            } else if let Some(_) = cap.name("rpar") {
-                return Ok(Token::RPar);
+            } else if let Some(_) = cap.name("lparen") {
+                return Ok(Token::LParen);
+            } else if let Some(_) = cap.name("rparen") {
+                return Ok(Token::RParen);
+            } else if let Some(_) = cap.name("comma") {
+                return Ok(Token::Comma);
+            } else if let Some(m) = cap.name("operator") {
+                return Ok(Token::Operator(m.as_str().into()));
+            } else if let Some(_) = cap.name("eof") {
+                return Ok(Token::Eof);
             } else {
-                return Err(LexError(format!("wtf")));
+                return Err(LexError("bruh wtf".into()));
             }
         }
     }

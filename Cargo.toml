@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 regex = "1.10.2"
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm17-0"] }

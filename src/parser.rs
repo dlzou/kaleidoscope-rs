@@ -2,6 +2,7 @@ use std::{collections::HashMap, error::Error, fmt, sync::OnceLock};
 
 use crate::lexer::Token;
 
+#[derive(Debug)]
 pub enum Expr {
     Number(f64),
     Variable(String),
@@ -16,20 +17,28 @@ pub enum Expr {
     },
 }
 
+#[derive(Debug)]
 pub struct Prototype {
     name: String,
     args: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct Function {
     proto: Box<Prototype>,
     body: Box<Expr>,
 }
 
-static BINOP_PRECEDENCE: OnceLock<HashMap<String, i32>> = OnceLock::new();
+#[derive(Debug)]
+pub enum ASTNode {
+    FunctionNode(Function),
+    ExternNode(Prototype),
+}
+
+static OP_PRECEDENCE: OnceLock<HashMap<String, i32>> = OnceLock::new();
 
 fn get_tok_precedence(op: &String) -> Result<i32> {
-    match BINOP_PRECEDENCE
+    match OP_PRECEDENCE
         .get_or_init(|| {
             HashMap::from([
                 ("<".into(), 1),
@@ -45,6 +54,37 @@ fn get_tok_precedence(op: &String) -> Result<i32> {
         Some(&p) => Ok(p),
         _ => Err(ParseError(format!("unknown operator '{op}'"))),
     }
+}
+
+pub fn parse(toks: &mut Vec<Token>) -> Result<Vec<ASTNode>> {
+    let mut ast_nodes: Vec<ASTNode> = Vec::new();
+    loop {
+        match toks.last() {
+            Some(Token::Eof) => {
+                break;
+            }
+            Some(Token::Semicolon) => {
+                toks.pop();
+                continue;
+            }
+            Some(Token::Def) => {
+                let func = parse_definition(toks)?;
+                ast_nodes.push(ASTNode::FunctionNode(*func));
+                println!("parsed definition");
+            },
+            Some(Token::Extern) => {
+                let ext = parse_extern(toks)?;
+                ast_nodes.push(ASTNode::ExternNode(*ext));
+                println!("parsed extern");
+            },
+            _ => {
+                let expr = parse_toplevel_expr(toks)?;
+                ast_nodes.push(ASTNode::FunctionNode(*expr));
+                println!("parsed toplevel");
+            }
+        }
+    }
+    Ok(ast_nodes)
 }
 
 fn parse_definition(toks: &mut Vec<Token>) -> Result<Box<Function>> {
@@ -78,7 +118,7 @@ fn parse_prototype(toks: &mut Vec<Token>) -> Result<Box<Prototype>> {
     }
 
     let mut args: Vec<String> = Vec::new();
-    while let Some(Token::Identifier(arg)) = toks.first() {
+    while let Some(Token::Identifier(arg)) = toks.last() {
         args.push(arg.clone());
         toks.pop();
     }
@@ -102,14 +142,14 @@ fn parse_toplevel_expr(toks: &mut Vec<Token>) -> Result<Box<Function>> {
 
 fn parse_expr(toks: &mut Vec<Token>) -> Result<Box<Expr>> {
     let expr = parse_primary_expr(toks)?;
-    match toks.first() {
+    match toks.last() {
         Some(Token::Operator(_)) => parse_binary_expr_rhs(toks, 0, expr),
         _ => Ok(expr),
     }
 }
 
 fn parse_primary_expr(toks: &mut Vec<Token>) -> Result<Box<Expr>> {
-    match toks.first() {
+    match toks.last() {
         Some(&Token::Identifier(_)) => parse_identifier(toks),
         Some(&Token::Number(_)) => parse_number(toks),
         Some(&Token::LParen) => parse_paren_expr(toks),
@@ -130,7 +170,7 @@ fn parse_identifier(toks: &mut Vec<Token>) -> Result<Box<Expr>> {
     };
 
     // Variable reference
-    match toks.first() {
+    match toks.last() {
         Some(&Token::LParen) => (),
         _ => return Ok(Box::new(Expr::Variable(id))),
     }
@@ -140,11 +180,11 @@ fn parse_identifier(toks: &mut Vec<Token>) -> Result<Box<Expr>> {
     let mut args: Vec<Box<Expr>> = Vec::new();
     loop {
         args.push(parse_expr(toks)?);
-        match toks.first() {
+        match toks.last() {
             Some(&Token::RParen) => break,
             _ => (),
         }
-        match toks.first() {
+        match toks.last() {
             Some(&Token::Comma) => (),
             _ => return Err(ParseError("expected ')' or ','".into())),
         }
@@ -182,7 +222,7 @@ fn parse_binary_expr_rhs(
     mut lhs: Box<Expr>,
 ) -> Result<Box<Expr>> {
     loop {
-        let op = match toks.first() {
+        let op = match toks.last() {
             Some(Token::Operator(op)) => {
                 let tok_prec = get_tok_precedence(op)?;
                 if tok_prec < expr_prec {
@@ -196,7 +236,7 @@ fn parse_binary_expr_rhs(
 
         toks.pop();
         let mut rhs = parse_primary_expr(toks)?;
-        if let Some(Token::Operator(next_op)) = toks.first() {
+        if let Some(Token::Operator(next_op)) = toks.last() {
             let tok_prec = get_tok_precedence(next_op)?;
             if tok_prec > expr_prec {
                 rhs = parse_binary_expr_rhs(toks, tok_prec, rhs)?;

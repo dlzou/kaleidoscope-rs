@@ -10,34 +10,35 @@ pub enum Token {
     LParen,
     RParen,
     Comma,
+    Semicolon,
     Identifier(String),
     Number(f64),
     Operator(String),
 }
 
-pub struct Tokenizer<'a> {
+pub struct Lexer<'a> {
     input: &'a str,
     index: usize,
     re: Regex,
 }
 
-impl<'a> Tokenizer<'a> {
+impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         let patterns = concat!(
             r"^\s*(",
-            r"(?<comment>#.*\n)|",           // Comment
-            r"(?<identifier>[a-zA-Z_]\w*)|", // Identifier
-            r"(?<number>\d+\.?\d*)|",        // Number
-            r"(?<lparen>\()|",                 // Left parenthesis
-            r"(?<rparen>\))|",                  // Right parenthesis
-            r"(?<comma>,)|",                  // Comma
-            r"(?<operator>\S+)|",
-            r"(?<eof>$)",
+            r"(?<comment>#.*\n)|",               // Comment
+            r"(?<identifier>[a-zA-Z_]\w*)|",     // Identifier
+            r"(?<number>\d+\.?\d*)|",            // Number
+            r"(?<lparen>\()|",                   // Left parenthesis
+            r"(?<rparen>\))|",                   // Right parenthesis
+            r"(?<comma>,)|",                     // Comma
+            r"(?<semicolon>;)|",                 // Semicolon
+            r"(?<operator>[\+\-\*/<>?!@^&=]+)|", // Operator
             r")",
         );
         let re = Regex::new(patterns).unwrap();
 
-        Tokenizer {
+        Lexer {
             input,
             index: 0,
             re,
@@ -45,17 +46,14 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Token> {
-        if self.index >= self.input.len() {
+        if self.index > self.input.len() {
             return Err(LexError("index larger than input length".into()));
         }
 
         loop {
             let offset_input = &self.input[self.index..];
             let cap = match self.re.captures(offset_input) {
-                Some(c) => {
-                    // println!("{:?}", c);
-                    c
-                }
+                Some(c) => c,
                 None => {
                     return Err(LexError(format!(
                         "bad token at byte {} starting with '{}'",
@@ -91,22 +89,24 @@ impl<'a> Tokenizer<'a> {
                 return Ok(Token::RParen);
             } else if let Some(_) = cap.name("comma") {
                 return Ok(Token::Comma);
+            } else if let Some(_) = cap.name("semicolon") {
+                return Ok(Token::Semicolon);
             } else if let Some(m) = cap.name("operator") {
                 return Ok(Token::Operator(m.as_str().into()));
-            } else if let Some(_) = cap.name("eof") {
+            } else if self.index == self.input.len() {
+                self.index += 1;
                 return Ok(Token::Eof);
-            } else {
-                return Err(LexError("bruh wtf".into()));
             }
+            debug_assert!(false, "improper lexer state");
         }
     }
 }
 
-impl<'a> Iterator for Tokenizer<'a> {
+impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Token>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.input.len() {
+        if self.index > self.input.len() {
             return None;
         } else {
             return Some(self.next_token());

@@ -3,14 +3,14 @@ use std::{
     io::{self, Write},
 };
 
-use inkwell::context::Context;
+use inkwell::{context::Context, passes::PassManager};
 use kaleidoscope_rs::{
-    compiler::compile,
+    compiler::{compile, run_passes},
     lexer::{Lexer, TokenStream},
     parser::parse,
 };
 
-fn test_lexer() {
+fn run_lexer() {
     let input = fs::read_to_string("test_samples/tokens.ks").unwrap();
 
     let mut lexer = Lexer::new(&input);
@@ -32,7 +32,7 @@ fn test_lexer() {
     }
 }
 
-fn test_parser() {
+fn run_parser() {
     loop {
         print!(">>> ");
         let _ = io::stdout().flush();
@@ -48,12 +48,13 @@ fn test_parser() {
     }
 }
 
-fn test_codegen() {
+fn run_compiler() {
     let context = Context::create();
     let builder = context.create_builder();
     let module = context.create_module("tmp");
+
     loop {
-        print!(">>> ");
+        print!("\n>>> ");
         let _ = io::stdout().flush();
         let mut input = String::new();
         let bytes = io::stdin().read_line(&mut input).unwrap();
@@ -70,6 +71,7 @@ fn test_codegen() {
 
         for func in parsed.unwrap() {
             if let Ok(compiled) = compile(&context, &builder, &module, &func) {
+                run_passes(&module);
                 compiled.print_to_stderr();
             };
         }
@@ -77,5 +79,5 @@ fn test_codegen() {
 }
 
 fn main() {
-    test_codegen();
+    run_compiler();
 }

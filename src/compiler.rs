@@ -1,9 +1,11 @@
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::passes::PassBuilderOptions;
+use inkwell::targets;
 use inkwell::types::BasicMetadataTypeEnum;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue};
-use inkwell::FloatPredicate;
+use inkwell::{FloatPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -46,29 +48,29 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let r = FloatValue::try_from(self.compile_expr(rhs)?).expect("rhs not a float");
 
                 match (*op).as_str() {
-                    "+" => Ok(self.builder.build_float_add(l, r, "tmpadd").unwrap().into()),
-                    "-" => Ok(self.builder.build_float_sub(l, r, "tmpsub").unwrap().into()),
-                    "*" => Ok(self.builder.build_float_mul(l, r, "tmpmul").unwrap().into()),
-                    "/" => Ok(self.builder.build_float_div(l, r, "tmpdiv").unwrap().into()),
+                    "+" => Ok(self.builder.build_float_add(l, r, "addtmp").unwrap().into()),
+                    "-" => Ok(self.builder.build_float_sub(l, r, "subtmp").unwrap().into()),
+                    "*" => Ok(self.builder.build_float_mul(l, r, "multmp").unwrap().into()),
+                    "/" => Ok(self.builder.build_float_div(l, r, "divtmp").unwrap().into()),
                     "<" => {
                         let cmp = self
                             .builder
-                            .build_float_compare(FloatPredicate::ULT, l, r, "tmpcmp")
+                            .build_float_compare(FloatPredicate::ULT, l, r, "cmptmp")
                             .unwrap();
                         Ok(self
                             .builder
-                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")
+                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "booltmp")
                             .unwrap()
                             .into())
                     }
                     ">" => {
                         let cmp = self
                             .builder
-                            .build_float_compare(FloatPredicate::ULT, r, l, "tmpcmp")
+                            .build_float_compare(FloatPredicate::ULT, r, l, "cmptmp")
                             .unwrap();
                         Ok(self
                             .builder
-                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "tmpbool")
+                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "booltmp")
                             .unwrap()
                             .into())
                     }
@@ -190,6 +192,36 @@ pub fn compile<'a, 'ctx>(
 ) -> Result<FunctionValue<'ctx>> {
     let mut compiler = Compiler::new(context, builder, module);
     compiler.compile_func(func)
+}
+
+// #[llvm_versions(16.0..=latest)]
+pub fn run_passes(module: &Module) {
+    // New LLVM  pass manager
+    targets::Target::initialize_all(&targets::InitializationConfig::default());
+    let target_triple = targets::TargetMachine::get_default_triple();
+    let target = targets::Target::from_triple(&target_triple).unwrap();
+    let target_machine = target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::None,
+            targets::RelocMode::PIC, // i.e. link-time relocation; PIC = position-independent code
+            targets::CodeModel::Default,
+        )
+        .unwrap();
+
+    let passes: &[&str] = &[
+        "instcombine", // Some peephole optimizations
+        "reassociate", // Re-associate expressions to match more common expressions
+        "gvn", // Common sub-expression elimination
+        "simplifycfg", // Remove unreachable blocks
+        "mem2reg", // Promote alloca to register
+    ];
+
+    module
+        .run_passes(passes.join(",").as_str(), &target_machine, PassBuilderOptions::create())
+        .unwrap();
 }
 
 type Result<T> = std::result::Result<T, CompilerError>;

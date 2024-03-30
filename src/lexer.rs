@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use regex::Regex;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TokenKind {
     Eof,
     Def,
@@ -181,7 +181,7 @@ impl<'a> TokenStream<'a> {
             next_tok: Some(curr_tok),
         })
     }
-    
+
     pub fn peek_kind(&self) -> &TokenKind {
         &self.next_tok.as_ref().unwrap().kind
     }
@@ -189,7 +189,7 @@ impl<'a> TokenStream<'a> {
     pub fn peek_pos(&self) -> &TokenPosition {
         &self.next_tok.as_ref().unwrap().pos
     }
-    
+
     pub fn pop(&mut self) -> Result<Token> {
         let tok = self.next_tok.take();
         self.next_tok = Some(self.lexer.next_token()?);
@@ -202,7 +202,7 @@ type Result<T> = std::result::Result<T, LexError>;
 #[derive(Debug)]
 pub enum LexError {
     EndOfFile,
-    InvalidCharSeq(TokenPosition)
+    InvalidCharSeq(TokenPosition),
 }
 
 impl fmt::Display for LexError {

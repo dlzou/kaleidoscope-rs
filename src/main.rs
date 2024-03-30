@@ -3,7 +3,7 @@ use std::{
     io::{self, Write},
 };
 
-use inkwell::{context::Context, values::AnyValue};
+use inkwell::context::Context;
 use kaleidoscope_rs::{
     compiler::compile,
     lexer::{Lexer, TokenStream},
@@ -42,17 +42,16 @@ fn test_parser() {
             return;
         }
 
-        let lexer = Lexer::new(&input);
-        let mut tokens: Vec<_> = lexer.map(|token| token.kind).collect();
-        tokens.reverse();
-        let res = parse(&mut tokens);
-        println!("{:?}", res);
+        let mut tokens = TokenStream::new(&input).unwrap();
+        let parsed = parse(&mut tokens);
+        println!("{:?}", parsed);
     }
 }
 
 fn test_codegen() {
     let context = Context::create();
     let builder = context.create_builder();
+    let module = context.create_module("tmp");
     loop {
         print!(">>> ");
         let _ = io::stdout().flush();
@@ -62,16 +61,13 @@ fn test_codegen() {
             return;
         }
 
-        let lexer = Lexer::new(&input);
-        let mut tokens: Vec<_> = lexer.map(|token| token.kind).collect();
-        tokens.reverse();
+        let mut tokens = TokenStream::new(&input).unwrap();
         let parsed = parse(&mut tokens);
         println!("{:?}", parsed);
         if parsed.is_err() {
             continue;
         }
 
-        let module = context.create_module("tmp");
         for func in parsed.unwrap() {
             if let Ok(compiled) = compile(&context, &builder, &module, &func) {
                 compiled.print_to_stderr();

@@ -29,20 +29,20 @@ pub struct Function {
     pub body: Option<Expr>,
 }
 
-// macro_rules! pop_token_expect {
-//     ( $tokens:ident => $kind:pat ) => {
-//         match $tokens.pop() {
-//             Ok(Token {
-//                 kind: $kind,
-//                 pos: _,
-//             }) => (),
-//             Ok(Token { kind: k, pos: p }) => {
-//                 return Err(UnexpectedTokenError { kind: k, pos: p }.into())
-//             }
-//             Err(e) => return Err(ParseError::Lex(e)),
-//         }
-//     };
-// }
+macro_rules! pop_token_expect {
+    ( $tokens:ident : $kind:pat => $ret:expr ) => {
+        match $tokens.pop() {
+            Ok(Token {
+                kind: $kind,
+                pos: _,
+            }) => $ret,
+            Ok(Token { kind: k, pos: p }) => {
+                return Err(UnexpectedTokenError { kind: k, pos: p }.into())
+            }
+            Err(e) => return Err(ParseError::Lex(e)),
+        }
+    };
+}
 
 static OP_PRECEDENCE: OnceLock<HashMap<String, i32>> = OnceLock::new();
 
@@ -65,22 +65,22 @@ fn get_op_precedence(op: &String) -> Result<i32> {
     }
 }
 
-pub fn parse(tokens: &mut Vec<TokenKind>) -> Result<Vec<Function>> {
+pub fn parse(tokens: &mut TokenStream) -> Result<Vec<Function>> {
     let mut ast_nodes: Vec<Function> = Vec::new();
     loop {
-        match tokens.last() {
-            Some(TokenKind::Eof) => {
+        match tokens.peek_kind() {
+            TokenKind::Eof => {
                 break;
             }
-            Some(TokenKind::Semicolon) => {
-                tokens.pop();
+            TokenKind::Semicolon => {
+                tokens.pop()?;
                 continue;
             }
-            Some(TokenKind::Def) => {
+            TokenKind::Def => {
                 let func = parse_definition(tokens)?;
                 ast_nodes.push(func);
             }
-            Some(TokenKind::Extern) => {
+            TokenKind::Extern => {
                 let ext = parse_extern(tokens)?;
                 ast_nodes.push(ext);
             }
@@ -93,11 +93,8 @@ pub fn parse(tokens: &mut Vec<TokenKind>) -> Result<Vec<Function>> {
     Ok(ast_nodes)
 }
 
-fn parse_definition(tokens: &mut Vec<TokenKind>) -> Result<Function> {
-    match tokens.pop() {
-        Some(TokenKind::Def) => (),
-        _ => return Err(ParseError::Other("expected 'def'".into())),
-    }
+fn parse_definition(tokens: &mut TokenStream) -> Result<Function> {
+    pop_token_expect!(tokens : TokenKind::Def => ());
 
     let proto = parse_prototype(tokens)?;
     let body = parse_expr(tokens)?;
@@ -107,59 +104,55 @@ fn parse_definition(tokens: &mut Vec<TokenKind>) -> Result<Function> {
     })
 }
 
-fn parse_extern(tokens: &mut Vec<TokenKind>) -> Result<Function> {
-    match tokens.pop() {
-        Some(TokenKind::Extern) => (),
-        _ => return Err(ParseError::Other("expected 'extern'".into())),
-    }
+fn parse_extern(tokens: &mut TokenStream) -> Result<Function> {
+    pop_token_expect!(tokens : TokenKind::Extern => ());
 
     let proto = parse_prototype(tokens)?;
     Ok(Function { proto, body: None })
 }
 
-fn parse_prototype(tokens: &mut Vec<TokenKind>) -> Result<Prototype> {
-    let name = match tokens.pop() {
-        Some(TokenKind::Identifier(id)) => id,
-        _ => return Err(ParseError::Other("expected function name".into())),
-    };
+fn parse_prototype(tokens: &mut TokenStream) -> Result<Prototype> {
+    let name = pop_token_expect!(tokens : TokenKind::Identifier(id) => id);
 
-    match tokens.pop() {
-        Some(TokenKind::LParen) => (),
-        _ => return Err(ParseError::Other("expected '('".into())),
-    }
+    pop_token_expect!(tokens : TokenKind::LParen => ());
 
     let mut params: Vec<String> = Vec::new();
     loop {
-        match tokens.last() {
-            Some(TokenKind::RParen) => break,
-            Some(TokenKind::Identifier(p)) => {
+        match tokens.peek_kind() {
+            TokenKind::RParen => break,
+            TokenKind::Identifier(p) => {
                 params.push(p.clone());
-                tokens.pop();
+                tokens.pop()?;
             }
-            _ => return Err(ParseError::Other("expected identifier or ')'".into())),
-        }
-        match tokens.last() {
-            Some(&TokenKind::RParen) => break,
-            Some(&TokenKind::Comma) => {
-                tokens.pop();
+            k => {
+                return Err(UnexpectedTokenError {
+                    kind: k.clone(),
+                    pos: tokens.peek_pos().clone(),
+                }
+                .into())
             }
-            _ => return Err(ParseError::Other("expected ')' or ','".into())),
         }
-    }
-    while let Some(TokenKind::Identifier(p)) = tokens.last() {
-        params.push(p.clone());
-        tokens.pop();
+        match tokens.peek_kind() {
+            TokenKind::RParen => break,
+            TokenKind::Comma => {
+                tokens.pop()?;
+            }
+            k => {
+                return Err(UnexpectedTokenError {
+                    kind: k.clone(),
+                    pos: tokens.peek_pos().clone(),
+                }
+                .into())
+            }
+        }
     }
 
-    match tokens.pop() {
-        Some(TokenKind::RParen) => (),
-        _ => return Err(ParseError::Other("expected ')'".into())),
-    }
+    pop_token_expect!(tokens : TokenKind::RParen => ());
 
     Ok(Prototype { name, params })
 }
 
-fn parse_toplevel_expr(tokens: &mut Vec<TokenKind>) -> Result<Function> {
+fn parse_toplevel_expr(tokens: &mut TokenStream) -> Result<Function> {
     let proto = Prototype {
         name: "".into(),
         params: Vec::new(),
@@ -171,89 +164,78 @@ fn parse_toplevel_expr(tokens: &mut Vec<TokenKind>) -> Result<Function> {
     })
 }
 
-fn parse_expr(tokens: &mut Vec<TokenKind>) -> Result<Expr> {
+fn parse_expr(tokens: &mut TokenStream) -> Result<Expr> {
     let lhs = parse_primary_expr(tokens)?;
     parse_binary_expr_rhs(tokens, 0, lhs)
 }
 
-fn parse_primary_expr(toks: &mut Vec<TokenKind>) -> Result<Expr> {
-    match toks.last() {
-        Some(&TokenKind::Identifier(_)) => parse_identifier(toks),
-        Some(&TokenKind::Number(_)) => parse_number(toks),
-        Some(&TokenKind::LParen) => parse_paren_expr(toks),
-        Some(t) => Err(ParseError::Other(format!(
-            "expected primary expression, got {:?}",
-            *t
-        ))),
-        None => Err(ParseError::Other(
-            "expected primary expression, got nothing".into(),
-        )),
+fn parse_primary_expr(tokens: &mut TokenStream) -> Result<Expr> {
+    match tokens.peek_kind() {
+        TokenKind::Identifier(_) => parse_identifier(tokens),
+        TokenKind::Number(_) => parse_number(tokens),
+        TokenKind::LParen => parse_paren_expr(tokens),
+        k => {
+            return Err(UnexpectedTokenError {
+                kind: k.clone(),
+                pos: tokens.peek_pos().clone(),
+            }
+            .into())
+        }
     }
 }
 
-fn parse_identifier(tokens: &mut Vec<TokenKind>) -> Result<Expr> {
-    let id = match tokens.pop() {
-        Some(TokenKind::Identifier(id)) => id,
-        _ => return Err(ParseError::Other("expected identifier".into())),
-    };
+fn parse_identifier(tokens: &mut TokenStream) -> Result<Expr> {
+    let id = pop_token_expect!(tokens : TokenKind::Identifier(id) => id);
 
     // Variable reference
-    match tokens.last() {
-        Some(&TokenKind::LParen) => (),
+    match tokens.peek_kind() {
+        TokenKind::LParen => (),
         _ => return Ok(Expr::Variable(id)),
     }
 
     // Call
-    tokens.pop(); // LParen
+    tokens.pop()?; // LParen
     let mut args: Vec<Expr> = Vec::new();
     loop {
-        match tokens.last() {
-            Some(TokenKind::RParen) => break,
+        match tokens.peek_kind() {
+            TokenKind::RParen => break,
             _ => {
                 args.push(parse_expr(tokens)?);
             }
         }
-        match tokens.last() {
-            Some(&TokenKind::RParen) => break,
-            Some(&TokenKind::Comma) => {
-                tokens.pop();
+        match tokens.peek_kind() {
+            TokenKind::RParen => break,
+            TokenKind::Comma => {
+                tokens.pop()?;
             }
-            _ => return Err(ParseError::Other("expected ')' or ','".into())),
+            k => {
+                return Err(UnexpectedTokenError {
+                    kind: k.clone(),
+                    pos: tokens.peek_pos().clone(),
+                }
+                .into())
+            }
         }
     }
-    tokens.pop(); // RParen
+    tokens.pop()?; // RParen
     Ok(Expr::Call { callee: id, args })
 }
 
-fn parse_number(tokens: &mut Vec<TokenKind>) -> Result<Expr> {
-    let n = match tokens.pop() {
-        Some(TokenKind::Number(n)) => n,
-        _ => return Err(ParseError::Other("expected number".into())),
-    };
+fn parse_number(tokens: &mut TokenStream) -> Result<Expr> {
+    let n = pop_token_expect!(tokens : TokenKind::Number(n) => n);
     Ok(Expr::Number(n))
 }
 
-fn parse_paren_expr(tokens: &mut Vec<TokenKind>) -> Result<Expr> {
-    match tokens.pop() {
-        Some(TokenKind::LParen) => (),
-        _ => return Err(ParseError::Other("expected '('".into())),
-    }
-
+fn parse_paren_expr(tokens: &mut TokenStream) -> Result<Expr> {
+    pop_token_expect!(tokens : TokenKind::LParen => ());
     let expr = parse_expr(tokens);
-    match tokens.pop() {
-        Some(TokenKind::RParen) => (),
-        _ => return Err(ParseError::Other("expected ')'".into())),
-    }
+    pop_token_expect!(tokens : TokenKind::RParen => ());
     expr
 }
 
-fn parse_binary_expr_rhs(
-    tokens: &mut Vec<TokenKind>,
-    expr_prec: i32,
-    mut lhs: Expr,
-) -> Result<Expr> {
+fn parse_binary_expr_rhs(tokens: &mut TokenStream, expr_prec: i32, mut lhs: Expr) -> Result<Expr> {
     loop {
-        let (op, op_prec) = if let Some(TokenKind::Operator(op)) = tokens.last() {
+        let (op, op_prec) = if let TokenKind::Operator(op) = tokens.peek_kind() {
             let op_prec = get_op_precedence(op)?;
             if op_prec < expr_prec {
                 return Ok(lhs);
@@ -263,9 +245,9 @@ fn parse_binary_expr_rhs(
             return Ok(lhs);
         };
 
-        tokens.pop(); // op
+        tokens.pop()?; // op
         let mut rhs = parse_primary_expr(tokens)?;
-        if let Some(TokenKind::Operator(next_op)) = tokens.last() {
+        if let TokenKind::Operator(next_op) = tokens.peek_kind() {
             let next_op_prec = get_op_precedence(next_op)?;
             if op_prec < next_op_prec {
                 rhs = parse_binary_expr_rhs(tokens, op_prec + 1, rhs)?;
@@ -330,18 +312,11 @@ type Result<T> = std::result::Result<T, ParseError>;
 
 #[cfg(test)]
 mod tests {
-    use crate::{lexer::TokenKind, parser};
+    use crate::{lexer::TokenStream, parser};
 
     #[test]
     fn parse_expr_binary_1() {
-        let mut tokens = vec![
-            TokenKind::Identifier("a".into()),
-            TokenKind::Operator("+".into()),
-            TokenKind::Identifier("b".into()),
-            TokenKind::Operator("*".into()),
-            TokenKind::Identifier("c".into()),
-        ];
-        tokens.reverse();
+        let mut tokens = TokenStream::new("a + b * c").unwrap();
         let res = parser::parse_expr(&mut tokens).unwrap();
         assert_eq!(
             "Binary { op: \"+\", lhs: Variable(\"a\"), rhs: Binary { op: \"*\", lhs: Variable(\"b\"), rhs: Variable(\"c\") } }",
@@ -351,14 +326,7 @@ mod tests {
 
     #[test]
     fn parse_expr_binary_2() {
-        let mut tokens = vec![
-            TokenKind::Identifier("a".into()),
-            TokenKind::Operator("*".into()),
-            TokenKind::Identifier("b".into()),
-            TokenKind::Operator("+".into()),
-            TokenKind::Identifier("c".into()),
-        ];
-        tokens.reverse();
+        let mut tokens = TokenStream::new("a * b + c").unwrap();
         let res = parser::parse_expr(&mut tokens).unwrap();
         assert_eq!(
             "Binary { op: \"+\", lhs: Binary { op: \"*\", lhs: Variable(\"a\"), rhs: Variable(\"b\") }, rhs: Variable(\"c\") }",
@@ -368,16 +336,7 @@ mod tests {
 
     #[test]
     fn parse_identifier_call() {
-        let mut tokens = vec![
-            TokenKind::Identifier("f".into()),
-            TokenKind::LParen,
-            TokenKind::Number(1.0),
-            TokenKind::Comma,
-            TokenKind::Number(2.0),
-            TokenKind::Comma,
-            TokenKind::RParen,
-        ];
-        tokens.reverse();
+        let mut tokens = TokenStream::new("f(1, 2,)").unwrap();
         let res = parser::parse_identifier(&mut tokens).unwrap();
         assert_eq!(
             "Call { callee: \"f\", args: [Number(1.0), Number(2.0)] }",

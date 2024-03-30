@@ -6,7 +6,6 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, Functi
 use inkwell::FloatPredicate;
 use std::collections::HashMap;
 use std::error::Error;
-use std::ffi::CStr;
 use std::fmt;
 
 use crate::parser::*;
@@ -191,10 +190,6 @@ pub fn compile<'a, 'ctx>(
 ) -> Result<FunctionValue<'ctx>> {
     let mut compiler = Compiler::new(context, builder, module);
     compiler.compile_func(func)
-}
-
-fn to_string_rs(cstr: &CStr) -> String {
-    String::from_utf8_lossy(cstr.to_bytes()).to_string()
 }
 
 type Result<T> = std::result::Result<T, CompilerError>;

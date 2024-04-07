@@ -7,6 +7,9 @@ pub enum TokenKind {
     Eof,
     Def,
     Extern,
+    If,
+    Then,
+    Else,
     LParen,
     RParen,
     Comma,
@@ -104,6 +107,24 @@ impl<'a> Lexer<'a> {
                     "extern" => {
                         return Ok(Token {
                             kind: TokenKind::Extern,
+                            pos: last_pos,
+                        })
+                    }
+                    "if" => {
+                        return Ok(Token {
+                            kind: TokenKind::If,
+                            pos: last_pos,
+                        })
+                    }
+                    "then" => {
+                        return Ok(Token {
+                            kind: TokenKind::Then,
+                            pos: last_pos,
+                        })
+                    }
+                    "else" => {
+                        return Ok(Token {
+                            kind: TokenKind::Else,
                             pos: last_pos,
                         })
                     }

@@ -11,6 +11,11 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    If {
+        cond_expr: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
     Call {
         callee: String,
         args: Vec<Expr>,
@@ -112,7 +117,11 @@ fn parse_extern(tokens: &mut TokenStream) -> Result<Function> {
     pop_token_expect!(tokens : TokenKind::Extern => ());
 
     let proto = parse_prototype(tokens)?;
-    Ok(Function { proto, body: None, is_anon: false })
+    Ok(Function {
+        proto,
+        body: None,
+        is_anon: false,
+    })
 }
 
 fn parse_prototype(tokens: &mut TokenStream) -> Result<Prototype> {
@@ -179,6 +188,7 @@ fn parse_primary_expr(tokens: &mut TokenStream) -> Result<Expr> {
         TokenKind::Identifier(_) => parse_identifier(tokens),
         TokenKind::Number(_) => parse_number(tokens),
         TokenKind::LParen => parse_paren_expr(tokens),
+        TokenKind::If => parse_if_expr(tokens),
         k => {
             return Err(UnexpectedTokenError {
                 kind: k.clone(),
@@ -236,6 +246,23 @@ fn parse_paren_expr(tokens: &mut TokenStream) -> Result<Expr> {
     let expr = parse_expr(tokens);
     pop_token_expect!(tokens : TokenKind::RParen => ());
     expr
+}
+
+fn parse_if_expr(tokens: &mut TokenStream) -> Result<Expr> {
+    pop_token_expect!(tokens : TokenKind::If => ());
+    let cond_expr = Box::new(parse_expr(tokens)?);
+
+    pop_token_expect!(tokens : TokenKind::Then => ());
+    let then_expr = Box::new(parse_expr(tokens)?);
+
+    pop_token_expect!(tokens : TokenKind::Else => ());
+    let else_expr = Box::new(parse_expr(tokens)?);
+
+    Ok(Expr::If {
+        cond_expr,
+        then_expr,
+        else_expr,
+    })
 }
 
 fn parse_binary_expr_rhs(tokens: &mut TokenStream, expr_prec: i32, mut lhs: Expr) -> Result<Expr> {

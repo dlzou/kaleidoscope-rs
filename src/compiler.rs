@@ -4,7 +4,7 @@ use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::error::Error;
@@ -51,8 +51,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 ref lhs,
                 ref rhs,
             } => {
-                let l = FloatValue::try_from(self.compile_expr(lhs)?).expect("lhs not a float");
-                let r = FloatValue::try_from(self.compile_expr(rhs)?).expect("rhs not a float");
+                let l = self.compile_expr(lhs)?.into_float_value();
+                let r = self.compile_expr(rhs)?.into_float_value();
 
                 match (*op).as_str() {
                     "+" => Ok(self.builder.build_float_add(l, r, "addtmp").unwrap().into()),
@@ -112,6 +112,58 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
                 None => Err(CompileError(format!("unknown function '{callee}'"))),
             },
+
+            Expr::If {
+                ref cond_expr,
+                ref then_expr,
+                ref else_expr,
+            } => {
+                let cond = self.compile_expr(cond_expr)?.into_float_value();
+                let cond = self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::ONE,
+                        cond,
+                        self.context.f64_type().const_float(0.0).into(),
+                        "ifcond",
+                    )
+                    .unwrap();
+
+                let fv = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let then_bb = self.context.append_basic_block(fv, "then");
+                let else_bb = self.context.append_basic_block(fv, "else");
+                let cont_bb = self.context.append_basic_block(fv, "ifcont");
+                self.builder
+                    .build_conditional_branch(cond, then_bb, else_bb)
+                    .unwrap();
+
+                // Build then block
+                self.builder.position_at_end(then_bb);
+                let then_val = self.compile_expr(then_expr)?;
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+                let then_bb = self.builder.get_insert_block().unwrap(); // Compiling then_expr may change current block
+
+                // Build else block
+                self.builder.position_at_end(else_bb);
+                let else_val = self.compile_expr(else_expr)?;
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+                let else_bb = self.builder.get_insert_block().unwrap();
+
+                // Build continued block with Phi node
+                self.builder.position_at_end(cont_bb);
+                let phi = self
+                    .builder
+                    .build_phi(self.context.f64_type(), "iftmp")
+                    .unwrap();
+                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
+
+                Ok(phi.as_basic_value())
+            }
         }
     }
 
@@ -173,7 +225,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             return Ok(fv);
         }
 
+        // Create basic block in current context
         let bb = self.context.append_basic_block(fv, "entry");
+        // Set builder cursor position to basic block
         self.builder.position_at_end(bb);
 
         self.sym_tab.clear();
@@ -182,6 +236,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             self.sym_tab.insert(proto.params[i].clone(), param);
         }
 
+        // Builder generates code at cursor position
         let body = match self.compile_expr(self.func.body.as_ref().unwrap()) {
             Ok(expr) => expr,
             Err(e) => {

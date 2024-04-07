@@ -27,6 +27,7 @@ pub struct Prototype {
 pub struct Function {
     pub proto: Prototype,
     pub body: Option<Expr>,
+    pub is_anon: bool,
 }
 
 macro_rules! pop_token_expect {
@@ -43,6 +44,8 @@ macro_rules! pop_token_expect {
         }
     };
 }
+
+const ANON_FUNC_NAME: &str = "__anon";
 
 static OP_PRECEDENCE: OnceLock<HashMap<String, i32>> = OnceLock::new();
 
@@ -101,6 +104,7 @@ fn parse_definition(tokens: &mut TokenStream) -> Result<Function> {
     Ok(Function {
         proto,
         body: Some(body),
+        is_anon: false,
     })
 }
 
@@ -108,7 +112,7 @@ fn parse_extern(tokens: &mut TokenStream) -> Result<Function> {
     pop_token_expect!(tokens : TokenKind::Extern => ());
 
     let proto = parse_prototype(tokens)?;
-    Ok(Function { proto, body: None })
+    Ok(Function { proto, body: None, is_anon: false })
 }
 
 fn parse_prototype(tokens: &mut TokenStream) -> Result<Prototype> {
@@ -154,13 +158,14 @@ fn parse_prototype(tokens: &mut TokenStream) -> Result<Prototype> {
 
 fn parse_toplevel_expr(tokens: &mut TokenStream) -> Result<Function> {
     let proto = Prototype {
-        name: "".into(),
+        name: ANON_FUNC_NAME.into(),
         params: Vec::new(),
     };
     let body = parse_expr(tokens)?;
     Ok(Function {
         proto,
         body: Some(body),
+        is_anon: true,
     })
 }
 

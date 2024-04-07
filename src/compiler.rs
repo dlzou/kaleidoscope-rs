@@ -13,19 +13,26 @@ use std::fmt;
 use crate::parser::*;
 
 pub struct Compiler<'a, 'ctx> {
-    pub context: &'ctx Context,
-    pub builder: &'a Builder<'ctx>,
-    pub module: &'a Module<'ctx>,
+    context: &'ctx Context,
+    builder: &'a Builder<'ctx>,
+    module: &'a Module<'ctx>,
 
+    func: &'a Function,
     sym_tab: HashMap<String, BasicValueEnum<'ctx>>,
 }
 
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
-    fn new(context: &'ctx Context, builder: &'a Builder<'ctx>, module: &'a Module<'ctx>) -> Self {
+    fn new(
+        context: &'ctx Context,
+        builder: &'a Builder<'ctx>,
+        module: &'a Module<'ctx>,
+        func: &'a Function,
+    ) -> Self {
         Self {
             context,
             builder,
             module,
+            func,
             sym_tab: HashMap::new(),
         }
     }
@@ -36,7 +43,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
             Expr::Variable(ref name) => match self.sym_tab.get(name.as_str()) {
                 Some(val) => Ok(val.clone()),
-                None => Err(CompilerError(format!("variable '{name}' undefined"))),
+                None => Err(CompileError(format!("variable '{name}' undefined"))),
             },
 
             Expr::Binary {
@@ -74,7 +81,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             .unwrap()
                             .into())
                     }
-                    _ => Err(CompilerError(format!("unknown operator '{op}'"))),
+                    _ => Err(CompileError(format!("unknown operator '{op}'"))),
                 }
             }
 
@@ -100,15 +107,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         .left()
                     {
                         Some(val) => Ok(val),
-                        None => Err(CompilerError("invalid call".into())),
+                        None => Err(CompileError("invalid call".into())),
                     }
                 }
-                None => Err(CompilerError(format!("unknown function '{callee}'"))),
+                None => Err(CompileError(format!("unknown function '{callee}'"))),
             },
         }
     }
 
-    fn compile_proto(&self, proto: &Prototype) -> Result<FunctionValue<'ctx>> {
+    fn compile_proto(&self, proto: &Prototype) -> FunctionValue<'ctx> {
         // Build type information for function, assuming everything is f64
         let ret_type = self.context.f64_type();
         let args_types = std::iter::repeat(ret_type)
@@ -127,37 +134,42 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             arg.into_float_value().set_name(proto.params[i].as_str());
         }
 
-        Ok(fv)
+        fv
     }
 
-    fn compile_func(&mut self, func: &Function) -> Result<FunctionValue<'ctx>> {
+    fn compile_func(&mut self) -> Result<FunctionValue<'ctx>> {
         // Check for previous declarations or definitions
-        let proto = &func.proto;
-        let fv = self.module.get_function(proto.name.as_str());
-        let fv = match fv {
+        let proto = &self.func.proto;
+        let fv_old = self.module.get_function(proto.name.as_str());
+        let fv = match fv_old {
             Some(fv) => {
                 let fv_params = fv.get_params(); // fv moved?
                 if fv_params.len() != proto.params.len() {
-                    return Err(CompilerError(
+                    return Err(CompileError(
                         "function signature does not match previous declaration".into(),
                     ));
                 }
-                // let matches = fv_params
-                //     .iter()
-                //     .zip(proto.params)
-                //     .filter(|(f, p)| to_string_rs(f.get_name()) == p)
-                //     .count();
-                // if matches < max(fv_params.len(), proto.params.len()) {
-                //     return Err(CompilerError(
-                //         "function signature does not match previous declaration".into(),
-                //     ));
-                // }
+
+                let matches = fv_params
+                    .iter()
+                    .zip(proto.params.clone())
+                    .filter(|(f, p)| f.get_name().to_str().unwrap() == p)
+                    .count();
+                if matches < std::cmp::max(fv_params.len(), proto.params.len()) {
+                    return Err(CompileError(
+                        "function signature does not match previous declaration".into(),
+                    ));
+                }
+
+                if fv.count_basic_blocks() > 0 {
+                    return Err(CompileError("function cannot be redefined".into()));
+                }
                 fv
             }
-            None => self.compile_proto(proto)?,
+            None => self.compile_proto(proto),
         };
 
-        if func.body.is_none() {
+        if self.func.body.is_none() {
             return Ok(fv);
         }
 
@@ -170,7 +182,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             self.sym_tab.insert(proto.params[i].clone(), param);
         }
 
-        let body = self.compile_expr(func.body.as_ref().unwrap())?;
+        let body = match self.compile_expr(self.func.body.as_ref().unwrap()) {
+            Ok(expr) => expr,
+            Err(e) => {
+                unsafe {
+                    fv.delete();
+                }
+                return Err(e.into());
+            }
+        };
         self.builder.build_return(Some(&body)).unwrap();
 
         if fv.verify(true) {
@@ -179,7 +199,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             unsafe {
                 fv.delete();
             }
-            Err(CompilerError("invalid function".into()))
+            Err(CompileError("invalid function".into()))
         }
     }
 }
@@ -190,8 +210,8 @@ pub fn compile<'a, 'ctx>(
     module: &'a Module<'ctx>,
     func: &Function,
 ) -> Result<FunctionValue<'ctx>> {
-    let mut compiler = Compiler::new(context, builder, module);
-    compiler.compile_func(func)
+    let mut compiler = Compiler::new(context, builder, module, func);
+    compiler.compile_func()
 }
 
 // #[llvm_versions(16.0..=latest)]
@@ -214,25 +234,29 @@ pub fn run_passes(module: &Module) {
     let passes: &[&str] = &[
         "instcombine", // Some peephole optimizations
         "reassociate", // Re-associate expressions to match more common expressions
-        "gvn", // Common sub-expression elimination
+        "gvn",         // Common sub-expression elimination
         "simplifycfg", // Remove unreachable blocks
-        "mem2reg", // Promote alloca to register
+        "mem2reg",     // Promote alloca to register
     ];
 
     module
-        .run_passes(passes.join(",").as_str(), &target_machine, PassBuilderOptions::create())
+        .run_passes(
+            passes.join(",").as_str(),
+            &target_machine,
+            PassBuilderOptions::create(),
+        )
         .unwrap();
 }
 
-type Result<T> = std::result::Result<T, CompilerError>;
+type Result<T> = std::result::Result<T, CompileError>;
 
 #[derive(Debug)]
-pub struct CompilerError(String);
+pub struct CompileError(String);
 
-impl fmt::Display for CompilerError {
+impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self)
     }
 }
 
-impl Error for CompilerError {}
+impl Error for CompileError {}

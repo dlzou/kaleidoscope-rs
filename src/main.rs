@@ -3,7 +3,7 @@ use std::{
     io::{self, Write},
 };
 
-use inkwell::{context::Context, passes::PassManager};
+use inkwell::context::Context;
 use kaleidoscope_rs::{
     compiler::{compile, run_passes},
     lexer::{Lexer, TokenStream},
@@ -34,7 +34,7 @@ fn run_lexer() {
 
 fn run_parser() {
     loop {
-        print!(">>> ");
+        print!("\n>>> ");
         let _ = io::stdout().flush();
         let mut input = String::new();
         let bytes = io::stdin().read_line(&mut input).unwrap();
@@ -49,9 +49,18 @@ fn run_parser() {
 }
 
 fn run_compiler() {
+    let mut display_steps = false;
+    for arg in std::env::args() {
+        match arg.as_str() {
+            "--steps" => display_steps = true,
+            _ => (),
+        }
+    }
+
     let context = Context::create();
     let builder = context.create_builder();
-    let module = context.create_module("tmp");
+
+    let mut prev_funcs = Vec::new();
 
     loop {
         print!("\n>>> ");
@@ -64,16 +73,58 @@ fn run_compiler() {
 
         let mut tokens = TokenStream::new(&input).unwrap();
         let parsed = parse(&mut tokens);
-        println!("{:?}", parsed);
         if parsed.is_err() {
+            println!("!!! {:?}", parsed);
             continue;
+        }
+        if display_steps {
+            println!("\nParser output:");
+            println!("{:?}", parsed);
         }
 
         for func in parsed.unwrap() {
-            if let Ok(compiled) = compile(&context, &builder, &module, &func) {
-                run_passes(&module);
-                compiled.print_to_stderr();
+            let module = context.create_module("tmp");
+            for p in &prev_funcs {
+                compile(&context, &builder, &module, p).unwrap();
+            }
+            let fv = match compile(&context, &builder, &module, &func) {
+                Ok(fv) => {
+                    if display_steps {
+                        println!("\nLLVM unoptimized output:");
+                        fv.print_to_stderr();
+                    }
+                    if !func.is_anon {
+                        prev_funcs.push(func);
+                        continue;
+                    }
+                    fv
+                }
+                Err(e) => {
+                    println!("!!! {:?}", e);
+                    continue;
+                }
             };
+
+            // assert!(func.is_anon);
+            run_passes(&module);
+
+            let engine = module
+                .create_jit_execution_engine(inkwell::OptimizationLevel::None)
+                .unwrap();
+            let f_jit = unsafe {
+                engine.get_function::<unsafe extern "C" fn() -> f64>(
+                    fv.get_name().to_str().unwrap(),
+                )
+            };
+
+            match f_jit {
+                Ok(f) => unsafe {
+                    println!("{}", f.call());
+                },
+                Err(e) => {
+                    println!("!!! {:?}", e);
+                }
+            }
         }
     }
 }

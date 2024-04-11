@@ -118,12 +118,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 ref then_expr,
                 ref else_expr,
             } => {
-                let cond = self.compile_expr(cond_expr)?.into_float_value();
-                let cond = self
+                let cond_val = self.compile_expr(cond_expr)?.into_float_value();
+                let cond_val = self
                     .builder
                     .build_float_compare(
-                        FloatPredicate::ONE,
-                        cond,
+                        FloatPredicate::ONE, // Ordered and Not Equal
+                        cond_val,
                         self.context.f64_type().const_float(0.0).into(),
                         "ifcond",
                     )
@@ -135,11 +135,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .unwrap()
                     .get_parent()
                     .unwrap();
+
                 let then_bb = self.context.append_basic_block(fv, "then");
                 let else_bb = self.context.append_basic_block(fv, "else");
                 let cont_bb = self.context.append_basic_block(fv, "ifcont");
                 self.builder
-                    .build_conditional_branch(cond, then_bb, else_bb)
+                    .build_conditional_branch(cond_val, then_bb, else_bb)
                     .unwrap();
 
                 // Build then block
@@ -156,13 +157,88 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // Build continued block with Phi node
                 self.builder.position_at_end(cont_bb);
-                let phi = self
+                let phi_val = self
                     .builder
                     .build_phi(self.context.f64_type(), "iftmp")
                     .unwrap();
-                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
+                phi_val.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
 
-                Ok(phi.as_basic_value())
+                Ok(phi_val.as_basic_value())
+            }
+
+            Expr::For {
+                ref var,
+                ref start,
+                ref end,
+                ref step,
+                ref body,
+            } => {
+                let start_val = self.compile_expr(start)?.into_float_value();
+
+                let prehead_bb = self.builder.get_insert_block().unwrap();
+                let fv = prehead_bb.get_parent().unwrap();
+                let head_bb = self.context.append_basic_block(fv, "head");
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(head_bb);
+                let phi_val = self
+                    .builder
+                    .build_phi(self.context.f64_type(), var)
+                    .unwrap();
+                phi_val.add_incoming(&[(&start_val, prehead_bb)]);
+                
+                // Set loop variable in symbol table
+                let old_var = self.sym_tab.remove(var);
+                self.sym_tab
+                    .insert(var.to_string(), phi_val.as_basic_value());
+
+                let end_val = self.compile_expr(end)?.into_float_value();
+                let end_val = self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::ONE,
+                        end_val,
+                        self.context.f64_type().const_float(0.0).into(),
+                        "endcond",
+                    )
+                    .unwrap();
+
+                let body_bb = self.context.append_basic_block(fv, "body");
+                let cont_bb = self.context.append_basic_block(fv, "forcont");
+                self.builder
+                    .build_conditional_branch(end_val, body_bb, cont_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                self.compile_expr(body)?;
+
+                let step_val = match step {
+                    Some(expr) => self.compile_expr(expr)?.into_float_value(),
+                    None => self.context.f64_type().const_float(1.0),
+                };
+                let next_val = self
+                    .builder
+                    .build_float_add(
+                        phi_val.as_basic_value().into_float_value(),
+                        step_val,
+                        "step",
+                    )
+                    .unwrap();
+                let body_bb = self.builder.get_insert_block().unwrap();
+                phi_val.add_incoming(&[(&next_val, body_bb)]);
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(cont_bb);
+                match old_var {
+                    Some(v) => {
+                        self.sym_tab.insert(var.to_string(), v);
+                    }
+                    None => {
+                        self.sym_tab.remove(var);
+                    }
+                }
+
+                Ok(self.context.f64_type().const_float(0.0).into())
             }
         }
     }

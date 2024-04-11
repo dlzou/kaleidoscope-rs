@@ -112,9 +112,8 @@ fn run_compiler() {
                 .create_jit_execution_engine(inkwell::OptimizationLevel::None)
                 .unwrap();
             let f_jit = unsafe {
-                engine.get_function::<unsafe extern "C" fn() -> f64>(
-                    fv.get_name().to_str().unwrap(),
-                )
+                engine
+                    .get_function::<unsafe extern "C" fn() -> f64>(fv.get_name().to_str().unwrap())
             };
 
             match f_jit {

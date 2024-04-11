@@ -10,13 +10,15 @@ pub enum TokenKind {
     If,
     Then,
     Else,
+    For,
+    In,
     LParen,
     RParen,
     Comma,
     Semicolon,
+    Operator(String),
     Identifier(String),
     Number(f64),
-    Operator(String),
 }
 
 #[derive(Copy, Clone)]
@@ -125,6 +127,18 @@ impl<'a> Lexer<'a> {
                     "else" => {
                         return Ok(Token {
                             kind: TokenKind::Else,
+                            pos: last_pos,
+                        })
+                    }
+                    "for" => {
+                        return Ok(Token {
+                            kind: TokenKind::For,
+                            pos: last_pos,
+                        })
+                    }
+                    "in" => {
+                        return Ok(Token {
+                            kind: TokenKind::In,
                             pos: last_pos,
                         })
                     }

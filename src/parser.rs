@@ -16,6 +16,13 @@ pub enum Expr {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    For {
+        var: String,
+        start: Box<Expr>,
+        end: Box<Expr>,
+        step: Option<Box<Expr>>,
+        body: Box<Expr>,
+    },
     Call {
         callee: String,
         args: Vec<Expr>,
@@ -37,15 +44,14 @@ pub struct Function {
 
 macro_rules! pop_token_expect {
     ( $tokens:ident : $kind:pat => $ret:expr ) => {
-        match $tokens.pop() {
-            Ok(Token {
+        match $tokens.pop()? {
+            Token {
                 kind: $kind,
                 pos: _,
-            }) => $ret,
-            Ok(Token { kind: k, pos: p }) => {
+            } => $ret,
+            Token { kind: k, pos: p } => {
                 return Err(UnexpectedTokenError { kind: k, pos: p }.into())
             }
-            Err(e) => return Err(ParseError::Lex(e)),
         }
     };
 }
@@ -189,6 +195,7 @@ fn parse_primary_expr(tokens: &mut TokenStream) -> Result<Expr> {
         TokenKind::Number(_) => parse_number(tokens),
         TokenKind::LParen => parse_paren_expr(tokens),
         TokenKind::If => parse_if_expr(tokens),
+        TokenKind::For => parse_for_expr(tokens),
         k => {
             return Err(UnexpectedTokenError {
                 kind: k.clone(),
@@ -262,6 +269,40 @@ fn parse_if_expr(tokens: &mut TokenStream) -> Result<Expr> {
         cond_expr,
         then_expr,
         else_expr,
+    })
+}
+
+fn parse_for_expr(tokens: &mut TokenStream) -> Result<Expr> {
+    pop_token_expect!(tokens : TokenKind::For => ());
+    let var = pop_token_expect!(tokens : TokenKind::Identifier(id) => id);
+    match tokens.pop()? {
+        Token {
+            kind: TokenKind::Operator(op),
+            pos: _,
+        } if op == "=" => (),
+        Token { kind: k, pos: p } => return Err(UnexpectedTokenError { kind: k, pos: p }.into()),
+    }
+    let start = Box::new(parse_expr(tokens)?);
+
+    pop_token_expect!(tokens : TokenKind::Comma => ());
+    let end = Box::new(parse_expr(tokens)?);
+
+    let mut step = None;
+    if let TokenKind::Comma = tokens.peek_kind() {
+        tokens.pop()?;
+        step = Some(Box::new(parse_expr(tokens)?));
+    }
+
+    pop_token_expect!(tokens : TokenKind::In => ());
+
+    let body = Box::new(parse_expr(tokens)?);
+
+    Ok(Expr::For {
+        var,
+        start,
+        end,
+        step,
+        body,
     })
 }
 

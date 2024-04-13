@@ -81,7 +81,27 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             .unwrap()
                             .into())
                     }
-                    _ => Err(CompileError(format!("unknown operator '{op}'"))),
+                    b => {
+                        match self.module.get_function(b) {
+                            Some(fv) => {
+                                let a = vec![l, r];
+                                let a_val: Vec<BasicMetadataValueEnum> =
+                                    a.iter().map(|&val| val.into()).collect();
+
+                                match self
+                                    .builder
+                                    .build_call(fv, a_val.as_slice(), "tmp")
+                                    .unwrap()
+                                    .try_as_basic_value()
+                                    .left()
+                                {
+                                    Some(val) => Ok(val),
+                                    None => Err(CompileError("invalid call".into())),
+                                }
+                            }
+                            None => Err(CompileError(format!("unknown operator '{b}'")))
+                        }
+                    }
                 }
             }
 
@@ -89,7 +109,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 ref callee,
                 ref args,
             } => match self.module.get_function(callee.as_str()) {
-                Some(func) => {
+                Some(fv) => {
                     let mut a = Vec::with_capacity(args.len());
 
                     for arg in args {
@@ -101,7 +121,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                     match self
                         .builder
-                        .build_call(func, a_val.as_slice(), "tmp")
+                        .build_call(fv, a_val.as_slice(), "tmp")
                         .unwrap()
                         .try_as_basic_value()
                         .left()
@@ -186,7 +206,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .build_phi(self.context.f64_type(), var)
                     .unwrap();
                 phi_val.add_incoming(&[(&start_val, prehead_bb)]);
-                
+
                 // Set loop variable in symbol table
                 let old_var = self.sym_tab.remove(var);
                 self.sym_tab
@@ -203,8 +223,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     )
                     .unwrap();
 
-                let body_bb = self.context.append_basic_block(fv, "body");
-                let cont_bb = self.context.append_basic_block(fv, "forcont");
+                let body_bb = self.context.append_basic_block(fv, "loop");
+                let cont_bb = self.context.append_basic_block(fv, "loopcont");
                 self.builder
                     .build_conditional_branch(end_val, body_bb, cont_bb)
                     .unwrap();
@@ -265,7 +285,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         fv
     }
 
-    fn compile_func(&mut self) -> Result<FunctionValue<'ctx>> {
+    fn compile_func(&mut self, op_prec: &mut HashMap<String, usize>) -> Result<FunctionValue<'ctx>> {
         // Check for previous declarations or definitions
         let proto = &self.func.proto;
         let fv_old = self.module.get_function(proto.name.as_str());
@@ -299,6 +319,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         if self.func.body.is_none() {
             return Ok(fv);
+        }
+        
+        if proto.is_op && proto.params.len() == 2 {
+            op_prec.insert(proto.name.clone(), proto.precedence);
         }
 
         // Create basic block in current context
@@ -340,9 +364,10 @@ pub fn compile<'a, 'ctx>(
     builder: &'a Builder<'ctx>,
     module: &'a Module<'ctx>,
     func: &Function,
+    op_prec: &mut HashMap<String, usize>,
 ) -> Result<FunctionValue<'ctx>> {
     let mut compiler = Compiler::new(context, builder, module, func);
-    compiler.compile_func()
+    compiler.compile_func(op_prec)
 }
 
 // #[llvm_versions(16.0..=latest)]

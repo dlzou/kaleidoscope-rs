@@ -6,6 +6,10 @@ use crate::lexer::{LexError, Token, TokenKind, TokenPosition, TokenStream};
 pub enum Expr {
     Number(f64),
     Variable(String),
+    Unary {
+        op: String,
+        operand: Box<Expr>,
+    },
     Binary {
         op: String,
         lhs: Box<Expr>,
@@ -144,6 +148,15 @@ impl<'a, 'b> Parser<'a, 'b> {
                 kind: TokenKind::Identifier(id),
                 pos: _,
             } => id,
+
+            Token {
+                kind: TokenKind::Unary,
+                pos: _,
+            } => {
+                proto_kind = 1;
+                pop_token_expect!(self.tokens, TokenKind::Operator(op) => op)
+            }
+
             Token {
                 kind: TokenKind::Binary,
                 pos: _,
@@ -156,6 +169,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 name
             }
+            
             Token { kind: k, pos: p } => {
                 return Err(UnexpectedTokenError { kind: k, pos: p }.into());
             }
@@ -226,8 +240,25 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr> {
-        let lhs = self.parse_primary_expr()?;
+        let lhs = self.parse_unary_expr()?;
         self.parse_binary_expr_rhs(0, lhs)
+    }
+
+    fn parse_unary_expr(&mut self) -> Result<Expr> {
+        match self.tokens.peek_kind() {
+            TokenKind::Operator(op) => {
+                let op = op.clone();
+                self.tokens.pop()?;
+                let unary = Expr::Unary {
+                    op,
+                    operand: Box::new(self.parse_unary_expr()?),
+                };
+                Ok(unary)
+            }
+            _ => {
+                self.parse_primary_expr()
+            }
+        }
     }
 
     fn parse_primary_expr(&mut self) -> Result<Expr> {
@@ -348,7 +379,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             body,
         })
     }
-
+    
     fn parse_binary_expr_rhs(
         &mut self,
         expr_prec: usize,
@@ -366,7 +397,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
 
             self.tokens.pop()?; // op
-            let mut rhs = self.parse_primary_expr()?;
+            let mut rhs = self.parse_unary_expr()?;
             if let TokenKind::Operator(next_op) = self.tokens.peek_kind() {
                 let next_op_prec = self.get_op_precedence(next_op)?;
                 if op_prec < next_op_prec {

@@ -46,6 +46,32 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 None => Err(CompileError(format!("variable '{name}' undefined"))),
             },
 
+            Expr::Unary {
+                ref op,
+                ref operand,
+            } => {
+                let arg = self.compile_expr(operand)?.into_float_value();
+                if let Some(fv) = self.module.get_function(op.as_str()) {
+                    let a = vec![arg];
+                    let a_val: Vec<BasicMetadataValueEnum> =
+                        a.iter().map(|&val| val.into()).collect();
+
+                    if let Some(val) = self
+                        .builder
+                        .build_call(fv, a_val.as_slice(), "tmp")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                    {
+                        Ok(val)
+                    } else {
+                        Err(CompileError("invalid call".into()))
+                    }
+                } else {
+                    Err(CompileError(format!("unknown unary operator '{op}'")))
+                }
+            }
+
             Expr::Binary {
                 ref op,
                 ref lhs,
@@ -81,25 +107,26 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             .unwrap()
                             .into())
                     }
-                    b => {
-                        match self.module.get_function(b) {
-                            Some(fv) => {
-                                let a = vec![l, r];
-                                let a_val: Vec<BasicMetadataValueEnum> =
-                                    a.iter().map(|&val| val.into()).collect();
 
-                                match self
-                                    .builder
-                                    .build_call(fv, a_val.as_slice(), "tmp")
-                                    .unwrap()
-                                    .try_as_basic_value()
-                                    .left()
-                                {
-                                    Some(val) => Ok(val),
-                                    None => Err(CompileError("invalid call".into())),
-                                }
+                    b => {
+                        if let Some(fv) = self.module.get_function(b) {
+                            let a = vec![l, r];
+                            let a_val: Vec<BasicMetadataValueEnum> =
+                                a.iter().map(|&val| val.into()).collect();
+
+                            if let Some(val) = self
+                                .builder
+                                .build_call(fv, a_val.as_slice(), "tmp")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .left()
+                            {
+                                Ok(val)
+                            } else {
+                                Err(CompileError("invalid call".into()))
                             }
-                            None => Err(CompileError(format!("unknown operator '{b}'")))
+                        } else {
+                            Err(CompileError(format!("unknown binary operator '{b}'")))
                         }
                     }
                 }
@@ -285,7 +312,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         fv
     }
 
-    fn compile_func(&mut self, op_prec: &mut HashMap<String, usize>) -> Result<FunctionValue<'ctx>> {
+    fn compile_func(
+        &mut self,
+        op_prec: &mut HashMap<String, usize>,
+    ) -> Result<FunctionValue<'ctx>> {
         // Check for previous declarations or definitions
         let proto = &self.func.proto;
         let fv_old = self.module.get_function(proto.name.as_str());
@@ -320,7 +350,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         if self.func.body.is_none() {
             return Ok(fv);
         }
-        
+
         if proto.is_op && proto.params.len() == 2 {
             op_prec.insert(proto.name.clone(), proto.precedence);
         }

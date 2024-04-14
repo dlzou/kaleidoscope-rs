@@ -227,6 +227,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let head_bb = self.context.append_basic_block(fv, "head");
                 self.builder.build_unconditional_branch(head_bb).unwrap();
 
+                // Build head block
                 self.builder.position_at_end(head_bb);
                 let phi_val = self
                     .builder
@@ -256,9 +257,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .build_conditional_branch(end_val, body_bb, cont_bb)
                     .unwrap();
 
+                // Build loop block
                 self.builder.position_at_end(body_bb);
                 self.compile_expr(body)?;
 
+                // Update loop variable
                 let step_val = match step {
                     Some(expr) => self.compile_expr(expr)?.into_float_value(),
                     None => self.context.f64_type().const_float(1.0),
@@ -275,6 +278,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 phi_val.add_incoming(&[(&next_val, body_bb)]);
                 self.builder.build_unconditional_branch(head_bb).unwrap();
 
+                // Build continued block
                 self.builder.position_at_end(cont_bb);
                 match old_var {
                     Some(v) => {

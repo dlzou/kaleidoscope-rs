@@ -4,7 +4,7 @@ use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{FloatPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::error::Error;
@@ -18,7 +18,7 @@ pub struct Compiler<'a, 'ctx> {
     module: &'a Module<'ctx>,
 
     func: &'a Function,
-    sym_tab: HashMap<String, BasicValueEnum<'ctx>>,
+    sym_tab: HashMap<String, PointerValue<'ctx>>,
 }
 
 impl<'a, 'ctx> Compiler<'a, 'ctx> {
@@ -37,12 +37,29 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
     }
 
+    fn create_entry_block_alloca(&self, fn_value: FunctionValue<'ctx>, name: &str) -> PointerValue<'ctx> {
+        // mem2reg block only checks entry block
+        let tmp_b = self.context.create_builder();
+        let entry = fn_value.get_first_basic_block().unwrap();
+
+        match entry.get_first_instruction() {
+            Some(inst) => tmp_b.position_before(&inst),
+            None => tmp_b.position_at_end(entry),
+        }
+
+        tmp_b.build_alloca(self.context.f64_type(), name).unwrap()
+    }
+    
+    fn build_load(&self, val: PointerValue<'ctx>, name: &str) -> BasicValueEnum<'ctx> {
+        self.builder.build_load(self.context.f64_type(), val, name).unwrap()
+    }
+
     fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>> {
         match *expr {
             Expr::Number(n) => Ok(self.context.f64_type().const_float(n).into()),
 
             Expr::Variable(ref name) => match self.sym_tab.get(name.as_str()) {
-                Some(val) => Ok(val.clone()),
+                Some(val) => Ok(self.build_load(*val, name)),
                 None => Err(CompileError(format!("variable '{name}' undefined"))),
             },
 
@@ -220,20 +237,24 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 ref step,
                 ref body,
             } => {
-                let start_val = self.compile_expr(start)?.into_float_value();
-
                 let prehead_bb = self.builder.get_insert_block().unwrap();
                 let fv = prehead_bb.get_parent().unwrap();
+                
+                // Allocate stack space for loop variable
+                let alloca = self.create_entry_block_alloca(fv, var);
+                let start_val = self.compile_expr(start)?.into_float_value();
+                self.builder.build_store(alloca, start_val);
+
                 let head_bb = self.context.append_basic_block(fv, "head");
                 self.builder.build_unconditional_branch(head_bb).unwrap();
 
-                // Build head block
+                // Build head block, which evaluates end condition
                 self.builder.position_at_end(head_bb);
-                let phi_val = self
-                    .builder
-                    .build_phi(self.context.f64_type(), var)
-                    .unwrap();
-                phi_val.add_incoming(&[(&start_val, prehead_bb)]);
+                // let phi_val = self
+                //     .builder
+                //     .build_phi(self.context.f64_type(), var)
+                //     .unwrap();
+                // phi_val.add_incoming(&[(&start_val, prehead_bb)]);
 
                 // Set loop variable in symbol table
                 let old_var = self.sym_tab.remove(var);

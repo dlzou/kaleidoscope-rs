@@ -241,9 +241,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let fv = prehead_bb.get_parent().unwrap();
                 
                 // Allocate stack space for loop variable
-                let alloca = self.create_entry_block_alloca(fv, var);
+                let loop_var = self.create_entry_block_alloca(fv, var);
                 let start_val = self.compile_expr(start)?.into_float_value();
-                self.builder.build_store(alloca, start_val);
+                self.builder.build_store(loop_var, start_val).unwrap();
 
                 let head_bb = self.context.append_basic_block(fv, "head");
                 self.builder.build_unconditional_branch(head_bb).unwrap();
@@ -259,7 +259,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 // Set loop variable in symbol table
                 let old_var = self.sym_tab.remove(var);
                 self.sym_tab
-                    .insert(var.to_string(), phi_val.as_basic_value());
+                    .insert(var.to_string(), loop_var);
 
                 let end_val = self.compile_expr(end)?.into_float_value();
                 let end_val = self
@@ -290,13 +290,14 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let next_val = self
                     .builder
                     .build_float_add(
-                        phi_val.as_basic_value().into_float_value(),
+                        self.build_load(loop_var, "curtmp").into_float_value(),
                         step_val,
-                        "step",
+                        "nexttmp",
                     )
                     .unwrap();
-                let body_bb = self.builder.get_insert_block().unwrap();
-                phi_val.add_incoming(&[(&next_val, body_bb)]);
+                self.builder.build_store(loop_var, next_val).unwrap();
+                // let body_bb = self.builder.get_insert_block().unwrap();
+                // phi_val.add_incoming(&[(&next_val, body_bb)]);
                 self.builder.build_unconditional_branch(head_bb).unwrap();
 
                 // Build continued block
@@ -329,9 +330,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             .fn_type(args_types.as_slice(), false);
         let fv = self.module.add_function(proto.name.as_str(), fn_type, None);
 
-        // Name the arguments
-        for (i, arg) in fv.get_param_iter().enumerate() {
-            arg.into_float_value().set_name(proto.params[i].as_str());
+        // Name the parameters
+        for (i, param) in fv.get_param_iter().enumerate() {
+            param.into_float_value().set_name(proto.params[i].as_str());
         }
 
         fv
@@ -388,7 +389,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         self.sym_tab.clear();
         self.sym_tab.reserve(proto.params.len());
         for (i, param) in fv.get_param_iter().enumerate() {
-            self.sym_tab.insert(proto.params[i].clone(), param);
+            let name = proto.params[i].clone();
+            let alloca = self.create_entry_block_alloca(fv, &name);
+            self.builder.build_store(alloca, param).unwrap();
+            self.sym_tab.insert(name, alloca);
         }
 
         // Builder generates code at cursor position

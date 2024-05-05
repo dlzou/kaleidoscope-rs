@@ -27,6 +27,10 @@ pub enum Expr {
         step: Option<Box<Expr>>,
         body: Box<Expr>,
     },
+    Var {
+        vars: Vec<(String, Option<Expr>)>,
+        body: Box<Expr>,
+    },
     Call {
         callee: String,
         args: Vec<Expr>,
@@ -73,10 +77,7 @@ pub struct Parser<'a, 'b> {
 
 impl<'a, 'b> Parser<'a, 'b> {
     pub fn new(tokens: TokenStream<'a>, op_prec: &'b HashMap<String, usize>) -> Self {
-        Self {
-            tokens,
-            op_prec,
-        }
+        Self { tokens, op_prec }
     }
 
     fn get_op_precedence(&self, op: &String) -> Result<usize> {
@@ -169,7 +170,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 name
             }
-            
+
             Token { kind: k, pos: p } => {
                 return Err(UnexpectedTokenError { kind: k, pos: p }.into());
             }
@@ -255,9 +256,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 };
                 Ok(unary)
             }
-            _ => {
-                self.parse_primary_expr()
-            }
+            _ => self.parse_primary_expr(),
         }
     }
 
@@ -268,6 +267,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             TokenKind::LParen => self.parse_paren_expr(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::For => self.parse_for_expr(),
+            TokenKind::Var => self.parse_var_expr(),
             k => {
                 return Err(UnexpectedTokenError {
                     kind: k.clone(),
@@ -379,12 +379,53 @@ impl<'a, 'b> Parser<'a, 'b> {
             body,
         })
     }
-    
-    fn parse_binary_expr_rhs(
-        &mut self,
-        expr_prec: usize,
-        mut lhs: Expr,
-    ) -> Result<Expr> {
+
+    fn parse_var_expr(&mut self) -> Result<Expr> {
+        pop_token_expect!(self.tokens, TokenKind::Var => ());
+
+        let mut vars = Vec::new();
+        loop {
+            let id = pop_token_expect!(self.tokens, TokenKind::Identifier(id) => id);
+
+            match self.tokens.peek_kind() {
+                TokenKind::Operator(op) if op == "=" => {
+                    self.tokens.pop()?;
+                    vars.push((id, Some(self.parse_expr()?)));
+                }
+                TokenKind::Comma => {
+                    self.tokens.pop()?;
+                    vars.push((id, None));
+                    continue;
+                }
+                TokenKind::In => {
+                    vars.push((id, None));
+                    break;
+                }
+                k => {
+                    return Err(UnexpectedTokenError {
+                        kind: k.clone(),
+                        pos: self.tokens.peek_pos().clone(),
+                    }
+                    .into())
+                }
+            }
+            match self.tokens.peek_kind() {
+                TokenKind::Comma => {
+                    self.tokens.pop()?;
+                }
+                _ => break,
+            }
+        }
+
+        pop_token_expect!(self.tokens, TokenKind::In => ());
+        let body = self.parse_expr()?;
+        Ok(Expr::Var {
+            vars,
+            body: Box::new(body),
+        })
+    }
+
+    fn parse_binary_expr_rhs(&mut self, expr_prec: usize, mut lhs: Expr) -> Result<Expr> {
         loop {
             let (op, op_prec) = if let TokenKind::Operator(op) = self.tokens.peek_kind() {
                 let op_prec = self.get_op_precedence(op)?;
@@ -470,10 +511,7 @@ mod tests {
 
     #[test]
     fn parse_expr_binary_1() {
-        let op_prec = HashMap::from([
-            ("+".into(), 20),
-            ("*".into(), 30),
-        ]);
+        let op_prec = HashMap::from([("+".into(), 20), ("*".into(), 30)]);
         let tokens = TokenStream::new("a + b * c").unwrap();
         let mut parser = Parser::new(tokens, &op_prec);
         let res = parser.parse_expr().unwrap();
@@ -485,10 +523,7 @@ mod tests {
 
     #[test]
     fn parse_expr_binary_2() {
-        let op_prec = HashMap::from([
-            ("+".into(), 20),
-            ("*".into(), 30),
-        ]);
+        let op_prec = HashMap::from([("+".into(), 20), ("*".into(), 30)]);
         let tokens = TokenStream::new("a * b + c").unwrap();
         let mut parser = Parser::new(tokens, &op_prec);
         let res = parser.parse_expr().unwrap();
@@ -500,10 +535,7 @@ mod tests {
 
     #[test]
     fn parse_identifier_call() {
-        let op_prec = HashMap::from([
-            ("+".into(), 20),
-            ("*".into(), 30),
-        ]);
+        let op_prec = HashMap::from([("+".into(), 20), ("*".into(), 30)]);
         let tokens = TokenStream::new("f(1, 2,)").unwrap();
         let mut parser = Parser::new(tokens, &op_prec);
         let res = parser.parse_expr().unwrap();

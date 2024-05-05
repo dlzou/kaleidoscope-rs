@@ -12,12 +12,13 @@ pub enum TokenKind {
     Else,
     For,
     In,
+    Unary,
+    Binary,
+    Var,
     LParen,
     RParen,
     Comma,
     Semicolon,
-    Unary,
-    Binary,
     Operator(String),
     Identifier(String),
     Number(f64),
@@ -66,7 +67,7 @@ impl<'a> Lexer<'a> {
             r"(?<rparen>\))|",               // Right parenthesis
             r"(?<comma>,)|",                 // Comma
             r"(?<semicolon>;)|",             // Semicolon
-            r"(?<operator>[\+\-\*/<>=~!@$%^&?]+)|",  // Operator
+            r"(?<operator>[\+\-\*/<>=~!@$%^&:?]+)|",  // Operator
             r")",
         );
         let re = Regex::new(patterns).unwrap();
@@ -153,6 +154,12 @@ impl<'a> Lexer<'a> {
                     "binary" => {
                         return Ok(Token {
                             kind: TokenKind::Binary,
+                            pos: last_pos,
+                        })
+                    }
+                    "var" => {
+                        return Ok(Token {
+                            kind: TokenKind::Var,
                             pos: last_pos,
                         })
                     }

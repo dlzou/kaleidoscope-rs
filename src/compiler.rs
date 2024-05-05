@@ -4,7 +4,9 @@ use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue,
+};
 use inkwell::{FloatPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::error::Error;
@@ -37,7 +39,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
     }
 
-    fn create_entry_block_alloca(&self, fn_value: FunctionValue<'ctx>, name: &str) -> PointerValue<'ctx> {
+    fn create_entry_block_alloca(
+        &self,
+        fn_value: FunctionValue<'ctx>,
+        name: &str,
+    ) -> PointerValue<'ctx> {
         // mem2reg block only checks entry block
         let tmp_b = self.context.create_builder();
         let entry = fn_value.get_first_basic_block().unwrap();
@@ -49,24 +55,23 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         tmp_b.build_alloca(self.context.f64_type(), name).unwrap()
     }
-    
+
     fn build_load(&self, val: PointerValue<'ctx>, name: &str) -> BasicValueEnum<'ctx> {
-        self.builder.build_load(self.context.f64_type(), val, name).unwrap()
+        self.builder
+            .build_load(self.context.f64_type(), val, name)
+            .unwrap()
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>> {
-        match *expr {
-            Expr::Number(n) => Ok(self.context.f64_type().const_float(n).into()),
+        match expr {
+            &Expr::Number(n) => Ok(self.context.f64_type().const_float(n).into()),
 
             Expr::Variable(ref name) => match self.sym_tab.get(name.as_str()) {
                 Some(val) => Ok(self.build_load(*val, name)),
                 None => Err(CompileError(format!("variable '{name}' undefined"))),
             },
 
-            Expr::Unary {
-                ref op,
-                ref operand,
-            } => {
+            Expr::Unary { op, operand } => {
                 let arg = self.compile_expr(operand)?.into_float_value();
                 if let Some(fv) = self.module.get_function(op.as_str()) {
                     let a = vec![arg];
@@ -89,70 +94,86 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
             }
 
-            Expr::Binary {
-                ref op,
-                ref lhs,
-                ref rhs,
-            } => {
-                let l = self.compile_expr(lhs)?.into_float_value();
-                let r = self.compile_expr(rhs)?.into_float_value();
+            Expr::Binary { op, lhs, rhs } => {
+                if op == "=" {
+                    if let Expr::Variable(name) = lhs.as_ref() {
+                        let val = self.compile_expr(rhs)?;
+                        let var = match self.sym_tab.get(name) {
+                            Some(v) => v,
+                            None => return Err(CompileError("undefined variable".into())),
+                        };
 
-                match (*op).as_str() {
-                    "+" => Ok(self.builder.build_float_add(l, r, "addtmp").unwrap().into()),
-                    "-" => Ok(self.builder.build_float_sub(l, r, "subtmp").unwrap().into()),
-                    "*" => Ok(self.builder.build_float_mul(l, r, "multmp").unwrap().into()),
-                    "/" => Ok(self.builder.build_float_div(l, r, "divtmp").unwrap().into()),
-                    "<" => {
-                        let cmp = self
-                            .builder
-                            .build_float_compare(FloatPredicate::ULT, l, r, "cmptmp")
-                            .unwrap();
-                        Ok(self
-                            .builder
-                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "booltmp")
-                            .unwrap()
-                            .into())
+                        self.builder.build_store(*var, val).unwrap();
+                        Ok(val)
+                    } else {
+                        Err(CompileError("expected variable on LHS".into()))
                     }
-                    ">" => {
-                        let cmp = self
-                            .builder
-                            .build_float_compare(FloatPredicate::ULT, r, l, "cmptmp")
-                            .unwrap();
-                        Ok(self
-                            .builder
-                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "booltmp")
-                            .unwrap()
-                            .into())
-                    }
+                } else {
+                    let l = self.compile_expr(lhs)?.into_float_value();
+                    let r = self.compile_expr(rhs)?.into_float_value();
 
-                    b => {
-                        if let Some(fv) = self.module.get_function(b) {
-                            let a = vec![l, r];
-                            let a_val: Vec<BasicMetadataValueEnum> =
-                                a.iter().map(|&val| val.into()).collect();
-
-                            if let Some(val) = self
+                    match (*op).as_str() {
+                        "+" => Ok(self.builder.build_float_add(l, r, "addtmp").unwrap().into()),
+                        "-" => Ok(self.builder.build_float_sub(l, r, "subtmp").unwrap().into()),
+                        "*" => Ok(self.builder.build_float_mul(l, r, "multmp").unwrap().into()),
+                        "/" => Ok(self.builder.build_float_div(l, r, "divtmp").unwrap().into()),
+                        "<" => {
+                            let cmp = self
                                 .builder
-                                .build_call(fv, a_val.as_slice(), "tmp")
+                                .build_float_compare(FloatPredicate::ULT, l, r, "cmptmp")
+                                .unwrap();
+                            Ok(self
+                                .builder
+                                .build_unsigned_int_to_float(
+                                    cmp,
+                                    self.context.f64_type(),
+                                    "booltmp",
+                                )
                                 .unwrap()
-                                .try_as_basic_value()
-                                .left()
-                            {
-                                Ok(val)
+                                .into())
+                        }
+                        ">" => {
+                            let cmp = self
+                                .builder
+                                .build_float_compare(FloatPredicate::ULT, r, l, "cmptmp")
+                                .unwrap();
+                            Ok(self
+                                .builder
+                                .build_unsigned_int_to_float(
+                                    cmp,
+                                    self.context.f64_type(),
+                                    "booltmp",
+                                )
+                                .unwrap()
+                                .into())
+                        }
+
+                        b => {
+                            if let Some(fv) = self.module.get_function(b) {
+                                let a = vec![l, r];
+                                let a_val: Vec<BasicMetadataValueEnum> =
+                                    a.iter().map(|&val| val.into()).collect();
+
+                                if let Some(val) = self
+                                    .builder
+                                    .build_call(fv, a_val.as_slice(), "tmp")
+                                    .unwrap()
+                                    .try_as_basic_value()
+                                    .left()
+                                {
+                                    Ok(val)
+                                } else {
+                                    Err(CompileError("invalid call".into()))
+                                }
                             } else {
-                                Err(CompileError("invalid call".into()))
+                                Err(CompileError(format!("unknown binary operator '{b}'")))
                             }
-                        } else {
-                            Err(CompileError(format!("unknown binary operator '{b}'")))
                         }
                     }
                 }
             }
 
-            Expr::Call {
-                ref callee,
-                ref args,
-            } => match self.module.get_function(callee.as_str()) {
+            Expr::Call { callee, args } => match self.module.get_function(callee.as_str()) {
                 Some(fv) => {
                     let mut a = Vec::with_capacity(args.len());
 
@@ -178,9 +199,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             },
 
             Expr::If {
-                ref cond_expr,
-                ref then_expr,
-                ref else_expr,
+                cond_expr,
+                then_expr,
+                else_expr,
             } => {
                 let cond_val = self.compile_expr(cond_expr)?.into_float_value();
                 let cond_val = self
@@ -231,15 +252,15 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             }
 
             Expr::For {
-                ref var,
-                ref start,
-                ref end,
-                ref step,
-                ref body,
+                var,
+                start,
+                end,
+                step,
+                body,
             } => {
                 let prehead_bb = self.builder.get_insert_block().unwrap();
                 let fv = prehead_bb.get_parent().unwrap();
-                
+
                 // Allocate stack space for loop variable
                 let loop_var = self.create_entry_block_alloca(fv, var);
                 let start_val = self.compile_expr(start)?.into_float_value();
@@ -250,16 +271,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // Build head block, which evaluates end condition
                 self.builder.position_at_end(head_bb);
-                // let phi_val = self
-                //     .builder
-                //     .build_phi(self.context.f64_type(), var)
-                //     .unwrap();
-                // phi_val.add_incoming(&[(&start_val, prehead_bb)]);
 
                 // Set loop variable in symbol table
-                let old_var = self.sym_tab.remove(var);
-                self.sym_tab
-                    .insert(var.to_string(), loop_var);
+                let old_val = self.sym_tab.remove(var);
+                self.sym_tab.insert(var.to_string(), loop_var);
 
                 let end_val = self.compile_expr(end)?.into_float_value();
                 let end_val = self
@@ -296,13 +311,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     )
                     .unwrap();
                 self.builder.build_store(loop_var, next_val).unwrap();
-                // let body_bb = self.builder.get_insert_block().unwrap();
-                // phi_val.add_incoming(&[(&next_val, body_bb)]);
                 self.builder.build_unconditional_branch(head_bb).unwrap();
 
                 // Build continued block
                 self.builder.position_at_end(cont_bb);
-                match old_var {
+                match old_val {
                     Some(v) => {
                         self.sym_tab.insert(var.to_string(), v);
                     }
@@ -312,6 +325,41 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
 
                 Ok(self.context.f64_type().const_float(0.0).into())
+            }
+
+            Expr::Var { vars, body } => {
+                let fv = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let mut old_vals = Vec::new();
+
+                for (name, expr_opt) in vars {
+                    let init_val = if let Some(expr) = expr_opt {
+                        self.compile_expr(expr)?
+                    } else {
+                        self.context.f64_type().const_float(0.0).into()
+                    };
+                    let alloca = self.create_entry_block_alloca(fv, name);
+                    self.builder.build_store(alloca, init_val).unwrap();
+
+                    old_vals.push(self.sym_tab.remove(name));
+                    self.sym_tab.insert(name.clone(), alloca);
+                }
+
+                let body_val = self.compile_expr(body);
+                // Restore old variable values
+                for (i, val_opt) in old_vals.into_iter().enumerate() {
+                    if let Some(val) = val_opt {
+                        self.sym_tab.insert(vars[i].0.clone(), val);
+                    } else {
+                        self.sym_tab.remove(vars[i].0.as_str());
+                    }
+                }
+
+                body_val
             }
         }
     }

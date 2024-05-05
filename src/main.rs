@@ -20,6 +20,7 @@ fn run_compiler() {
     }
 
     let mut op_prec = HashMap::from([
+        ("=".into(), 2),
         ("<".into(), 10),
         (">".into(), 10),
         ("+".into(), 20),
